@@ -20,10 +20,10 @@ from ..util import util
 # Off-the-shelf deep network
 class PNet(nn.Module):
     '''Pre-trained network with all channels equally weighted by default'''
-    def __init__(self, pnet_type='vgg', pnet_rand=False, use_gpu=True):
+    def __init__(self, pnet_type='vgg', pnet_rand=False, device='cuda'):
         super(PNet, self).__init__()
 
-        self.use_gpu = use_gpu
+        self.device = device
 
         self.pnet_type = pnet_type
         self.pnet_rand = pnet_rand
@@ -42,17 +42,16 @@ class PNet(nn.Module):
 
         self.L = self.net.N_slices
 
-        if(use_gpu):
-            self.net.cuda()
-            self.shift = self.shift.cuda()
-            self.scale = self.scale.cuda()
+        self.net.to(device)
+        self.shift = self.shift.to(device)
+        self.scale = self.scale.to(device)
 
     def forward(self, in0, in1, retPerLayer=False):
         in0_sc = (in0 - self.shift.expand_as(in0))/self.scale.expand_as(in0)
         in1_sc = (in1 - self.shift.expand_as(in0))/self.scale.expand_as(in0)
 
-        outs0 = self.net.forward(in0_sc)
-        outs1 = self.net.forward(in1_sc)
+        outs0 = self.net(in0_sc)
+        outs1 = self.net(in1_sc)
 
         if(retPerLayer):
             all_scores = []
@@ -73,10 +72,11 @@ class PNet(nn.Module):
 
 # Learned perceptual metric
 class PNetLin(nn.Module):
-    def __init__(self, pnet_type='vgg', pnet_rand=False, pnet_tune=False, use_dropout=True, use_gpu=True, spatial=False, version='0.1'):
+    def __init__(self, pnet_type='vgg', pnet_rand=False, pnet_tune=False,
+                 use_dropout=True, device='cuda', spatial=False, version='0.1'):
         super(PNetLin, self).__init__()
 
-        self.use_gpu = use_gpu
+        self.device = device
         self.pnet_type = pnet_type
         self.pnet_tune = pnet_tune
         self.pnet_rand = pnet_rand
@@ -112,21 +112,20 @@ class PNetLin(nn.Module):
         self.shift = torch.autograd.Variable(torch.Tensor([-.030, -.088, -.188]).view(1,3,1,1))
         self.scale = torch.autograd.Variable(torch.Tensor([.458, .448, .450]).view(1,3,1,1))
 
-        if(use_gpu):
-            if(self.pnet_tune):
-                self.net.cuda()
-            else:
-                self.net[0].cuda()
-            self.shift = self.shift.cuda()
-            self.scale = self.scale.cuda()
-            self.lin0.cuda()
-            self.lin1.cuda()
-            self.lin2.cuda()
-            self.lin3.cuda()
-            self.lin4.cuda()
-            if(self.pnet_type=='squeeze'):
-                self.lin5.cuda()
-                self.lin6.cuda()
+        if(self.pnet_tune):
+            self.net.to(device)
+        else:
+            self.net[0].to(device)
+        self.shift = self.shift.to(device)
+        self.scale = self.scale.to(device)
+        self.lin0.to(device)
+        self.lin1.to(device)
+        self.lin2.to(device)
+        self.lin3.to(device)
+        self.lin4.to(device)
+        if(self.pnet_type=='squeeze'):
+            self.lin5.to(device)
+            self.lin6.to(device)
 
     def forward(self, in0, in1):
         in0_sc = (in0 - self.shift.expand_as(in0))/self.scale.expand_as(in0)
@@ -142,11 +141,11 @@ class PNetLin(nn.Module):
             in1_input = in1_sc
 
         if(self.pnet_tune):
-            outs0 = self.net.forward(in0_input)
-            outs1 = self.net.forward(in1_input)
+            outs0 = self.net(in0_input)
+            outs1 = self.net(in1_input)
         else:
-            outs0 = self.net[0].forward(in0_input)
-            outs1 = self.net[0].forward(in1_input)
+            outs0 = self.net[0](in0_input)
+            outs1 = self.net[0](in1_input)
 
         feats0 = {}
         feats1 = {}
@@ -191,25 +190,19 @@ class Dist2LogitLayer(nn.Module):
         self.model = nn.Sequential(*layers)
 
     def forward(self,d0,d1,eps=0.1):
-        return self.model.forward(torch.cat((d0,d1,d0-d1,d0/(d1+eps),d1/(d0+eps)),dim=1))
+        return self.model(torch.cat((d0,d1,d0-d1,d0/(d1+eps),d1/(d0+eps)),dim=1))
 
 class BCERankingLoss(nn.Module):
-    def __init__(self, use_gpu=True, chn_mid=32):
+    def __init__(self, device='cuda', chn_mid=32):
         super(BCERankingLoss, self).__init__()
-        self.use_gpu = use_gpu
-        self.net = Dist2LogitLayer(chn_mid=chn_mid)
+        self.device = device
+        self.net = Dist2LogitLayer(chn_mid=chn_mid).to(device)
         self.parameters = list(self.net.parameters())
         self.loss = torch.nn.BCELoss()
-        self.model = nn.Sequential(*[self.net])
-
-        if(self.use_gpu):
-            self.net.cuda()
 
     def forward(self, d0, d1, judge):
-        per = (judge+1.)/2.
-        if(self.use_gpu):
-            per = per.cuda()
-        self.logit = self.net.forward(d0,d1)
+        per = ((judge + 1.) / 2.).to(self.device)
+        self.logit = self.net(d0,d1)
         return self.loss(self.logit, per)
 
 class NetLinLayer(nn.Module):
@@ -224,13 +217,12 @@ class NetLinLayer(nn.Module):
 
 # L2, DSSIM metrics
 class FakeNet(nn.Module):
-    def __init__(self, use_gpu=True, colorspace='Lab'):
+    def __init__(self, device='cuda', colorspace='Lab'):
         super(FakeNet, self).__init__()
-        self.use_gpu = use_gpu
+        self.device = device
         self.colorspace=colorspace
 
 class L2(FakeNet):
-
     def forward(self, in0, in1):
         assert(in0.size()[0]==1) # currently only supports batchSize 1
 
@@ -240,10 +232,8 @@ class L2(FakeNet):
             return value
         elif(self.colorspace=='Lab'):
             value = util.l2(util.tensor2np(util.tensor2tensorlab(in0.data,to_norm=False)),
-                util.tensor2np(util.tensor2tensorlab(in1.data,to_norm=False)), range=100.).astype('float')
-            ret_var = Variable( torch.Tensor((value,) ) )
-            if(self.use_gpu):
-                ret_var = ret_var.cuda()
+                util.tensor2np(util.tensor2tensorlab(in1.data,to_norm=False)), range=100.)
+            ret_var = torch.as_tensor((value,), dtype=torch.float32, device=self.device)
             return ret_var
 
 class DSSIM(FakeNet):
@@ -252,13 +242,11 @@ class DSSIM(FakeNet):
         assert(in0.size()[0]==1) # currently only supports batchSize 1
 
         if(self.colorspace=='RGB'):
-            value = util.dssim(1.*util.tensor2im(in0.data), 1.*util.tensor2im(in1.data), range=255.).astype('float')
+            value = util.dssim(1.*util.tensor2im(in0.data), 1.*util.tensor2im(in1.data), range=255.)
         elif(self.colorspace=='Lab'):
             value = util.dssim(util.tensor2np(util.tensor2tensorlab(in0.data,to_norm=False)),
-                util.tensor2np(util.tensor2tensorlab(in1.data,to_norm=False)), range=100.).astype('float')
-        ret_var = Variable( torch.Tensor((value,) ) )
-        if(self.use_gpu):
-            ret_var = ret_var.cuda()
+                util.tensor2np(util.tensor2tensorlab(in1.data,to_norm=False)), range=100.)
+        ret_var = torch.as_tensor((value,), dtype=torch.float32, device=self.device)
         return ret_var
 
 def print_network(net):

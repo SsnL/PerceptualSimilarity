@@ -5,16 +5,17 @@ from torch.autograd import Variable
 from pdb import set_trace as st
 from IPython import embed
 
-class BaseModel():
+class BaseModel(object):
     def __init__(self):
         pass;
 
     def name(self):
         return 'BaseModel'
 
-    def initialize(self, use_gpu=True):
-        self.use_gpu = use_gpu
-        self.Tensor = torch.cuda.FloatTensor if self.use_gpu else torch.Tensor
+    def initialize(self, **kwargs):
+        pass
+        # self.use_gpu = use_gpu
+        # self.Tensor = torch.cuda.FloatTensor if self.use_gpu else torch.Tensor
         # self.save_dir = os.path.join(opt.checkpoints_dir, opt.name)
 
     def forward(self):

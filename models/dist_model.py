@@ -26,7 +26,10 @@ class DistModel(BaseModel):
     def name(self):
         return self.model_name
 
-    def initialize(self, model='net-lin', net='alex', pnet_rand=False, pnet_tune=False, model_path=None, colorspace='Lab', use_gpu=True, printNet=False, spatial=False, spatial_shape=None, spatial_order=1, spatial_factor=None, is_train=False, lr=.0001, beta1=0.5, version='0.1'):
+    def initialize(self, model='net-lin', net='alex', pnet_rand=False, pnet_tune=False,
+                   model_path=None, colorspace='Lab', device=torch.device('cuda'), printNet=False,
+                   spatial=False, spatial_shape=None, spatial_order=1, spatial_factor=None,
+                   is_train=False, lr=.0001, beta1=0.5, version='0.1'):
         '''
         INPUTS
             model - ['net-lin'] for linearly calibrated network
@@ -36,7 +39,7 @@ class DistModel(BaseModel):
             net - ['squeeze','alex','vgg']
             model_path - if None, will look in weights/[NET_NAME].pth
             colorspace - ['Lab','RGB'] colorspace to use for L2 and SSIM
-            use_gpu - bool - whether or not to use a GPU
+            device - device - which device to use
             printNet - bool - whether or not to print network architecture out
             spatial - bool - whether to output an array containing varying distances across spatial dimensions
             spatial_shape - if given, output spatial shape. if None then spatial shape is determined automatically via spatial_factor (see below).
@@ -47,11 +50,11 @@ class DistModel(BaseModel):
             beta1 - float - initial momentum term for adam
             version - 0.1 for latest, 0.0 was original
         '''
-        BaseModel.initialize(self, use_gpu=use_gpu)
+        BaseModel.initialize(self)
 
         self.model = model
         self.net = net
-        self.use_gpu = use_gpu
+        self.device = device
         self.is_train = is_train
         self.spatial = spatial
         self.spatial_shape = spatial_shape
@@ -60,10 +63,8 @@ class DistModel(BaseModel):
 
         self.model_name = '%s [%s]'%(model,net)
         if(self.model == 'net-lin'): # pretrained net + linear layer
-            self.net = networks.PNetLin(use_gpu=use_gpu,pnet_rand=pnet_rand, pnet_tune=pnet_tune, pnet_type=net,use_dropout=True,spatial=spatial,version=version)
-            kw = {}
-            if not use_gpu:
-                kw['map_location'] = 'cpu'
+            self.net = networks.PNetLin(device=device,pnet_rand=pnet_rand, pnet_tune=pnet_tune, pnet_type=net,use_dropout=True,spatial=spatial,version=version)
+            kw = dict(map_location=device)
             if(model_path is None):
                 import inspect
                 # model_path = './PerceptualSimilarity/weights/v%s/%s.pth'%(version,net)
@@ -75,13 +76,13 @@ class DistModel(BaseModel):
 
         elif(self.model=='net'): # pretrained network
             assert not self.spatial, 'spatial argument not supported yet for uncalibrated networks'
-            self.net = networks.PNet(use_gpu=use_gpu,pnet_type=net)
+            self.net = networks.PNet(device=device,pnet_type=net)
             self.is_fake_net = True
         elif(self.model in ['L2','l2']):
-            self.net = networks.L2(use_gpu=use_gpu,colorspace=colorspace) # not really a network, only for testing
+            self.net = networks.L2(device=device,colorspace=colorspace) # not really a network, only for testing
             self.model_name = 'L2'
         elif(self.model in ['DSSIM','dssim','SSIM','ssim']):
-            self.net = networks.DSSIM(use_gpu=use_gpu,colorspace=colorspace)
+            self.net = networks.DSSIM(device=device,colorspace=colorspace)
             self.model_name = 'SSIM'
         else:
             raise ValueError("Model [%s] not recognized." % self.model)
@@ -90,7 +91,7 @@ class DistModel(BaseModel):
 
         if self.is_train: # training mode
             # extra network on top to go from distances (d0,d1) => predicted human judgment (h*)
-            self.rankLoss = networks.BCERankingLoss(use_gpu=use_gpu)
+            self.rankLoss = networks.BCERankingLoss(device=device)
             self.parameters+=self.rankLoss.parameters
             self.lr = lr
             self.old_lr = lr
@@ -109,7 +110,7 @@ class DistModel(BaseModel):
         else:
             return self.net(in1,in2)
 
-    def forward(self, in0, in1, retNumpy=True):
+    def forward(self, in0, in1, retNumpy=False):
         ''' Function computes the distance between image patches in0 and in1
         INPUTS
             in0, in1 - torch.Tensor object of shape Nx3xXxY - image patch scaled to [-1,1]
@@ -118,25 +119,15 @@ class DistModel(BaseModel):
             computed distances between in0 and in1
         '''
 
-        self.input_ref = in0
-        self.input_p0 = in1
-
-        if(self.use_gpu):
-            self.input_ref = self.input_ref.cuda()
-            self.input_p0 = self.input_p0.cuda()
-
-        self.var_ref = Variable(self.input_ref,requires_grad=True)
-        self.var_p0 = Variable(self.input_p0,requires_grad=True)
-
-        self.d0 = self.forward_pair(self.var_ref, self.var_p0)
+        self.d0 = self.forward_pair(in0.to(self.device), in1.to(self.device))
         self.loss_total = self.d0
 
         def convert_output(d0):
+            if not self.spatial:
+                d0 = d0.view(-1)
             if(retNumpy):
                 ans = d0.cpu().data.numpy()
-                if not self.spatial:
-                    ans = ans.flatten()
-                else:
+                if self.spatial:
                     assert(ans.shape[0] == 1 and len(ans.shape) == 4)
                     return ans[0,...].transpose([1, 2, 0])                  # Reshape to usual numpy image format: (height, width, channels)
                 return ans
@@ -173,16 +164,10 @@ class DistModel(BaseModel):
                 module.weight.data = torch.clamp(module.weight.data,min=0)
 
     def set_input(self, data):
-        self.input_ref = data['ref']
-        self.input_p0 = data['p0']
-        self.input_p1 = data['p1']
-        self.input_judge = data['judge']
-
-        if(self.use_gpu):
-            self.input_ref = self.input_ref.cuda()
-            self.input_p0 = self.input_p0.cuda()
-            self.input_p1 = self.input_p1.cuda()
-            self.input_judge = self.input_judge.cuda()
+        self.input_ref = data['ref'].to(self.device)
+        self.input_p0 = data['p0'].to(self.device)
+        self.input_p1 = data['p1'].to(self.device)
+        self.input_judge = data['judge'].to(self.device)
 
         self.var_ref = Variable(self.input_ref,requires_grad=True)
         self.var_p0 = Variable(self.input_p0,requires_grad=True)
