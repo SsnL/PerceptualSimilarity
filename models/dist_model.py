@@ -105,9 +105,9 @@ class DistModel(BaseModel):
 
     def forward_pair(self,in1,in2,retPerLayer=False):
         if(retPerLayer):
-            return self.net.forward(in1,in2, retPerLayer=True)
+            return self.net(in1,in2, retPerLayer=True)
         else:
-            return self.net.forward(in1,in2)
+            return self.net(in1,in2)
 
     def forward(self, in0, in1, retNumpy=True):
         ''' Function computes the distance between image patches in0 and in1
