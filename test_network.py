@@ -41,7 +41,7 @@ if not spatial:
     print('Distances: (%.3f, %.3f)'%(ex_d0, ex_d1))
 else:
     print('Distances: (%.3f, %.3f)'%(ex_d0.mean(),ex_d1.mean()))            # The mean distance is approximately the same as the non-spatial distance
-    
+
     # Visualize a spatially-varying distance map between ex_p0 and ex_ref
     import pylab
     pylab.imshow(ex_d0)
