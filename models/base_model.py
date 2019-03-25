@@ -21,6 +21,9 @@ class BaseModel(object):
     def forward(self):
         pass
 
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
     def get_image_paths(self):
         pass
 
