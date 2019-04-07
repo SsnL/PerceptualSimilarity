@@ -97,6 +97,8 @@ class DistModel(BaseModel):
             self.old_lr = lr
             self.optimizer_net = torch.optim.Adam(self.parameters, lr=lr, betas=(beta1, 0.999))
         else: # test mode
+            for p in self.parameters:
+                p.requires_grad_(False)
             self.net.eval()
 
         if(printNet):
